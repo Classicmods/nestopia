@@ -26,6 +26,7 @@
 #define NES_NTSC_PAR ((Api::Video::Output::WIDTH - (overscan_h ? 16 : 0)) * (8.0 / 7.0)) / (Api::Video::Output::HEIGHT - (overscan_v ? 16 : 0))
 #define NES_PAL_PAR ((Api::Video::Output::WIDTH - (overscan_h ? 16 : 0)) * (2950000.0 / 2128137.0)) / (Api::Video::Output::HEIGHT - (overscan_v ? 16 : 0))
 #define NES_4_3_DAR (4.0 / 3.0);
+#define SAMPLERATE 48000
 
 using namespace Nes;
 
@@ -43,8 +44,8 @@ extern "C" void linearFree(void* mem);
 #endif
 static uint32_t* video_buffer = NULL;
 
-static int16_t audio_buffer[(48000 / 50)];
-static int16_t audio_stereo_buffer[2 * (48000 / 50)];
+static int16_t audio_buffer[(SAMPLERATE / 50)];
+static int16_t audio_stereo_buffer[2 * (SAMPLERATE / 50)];
 static Api::Emulator emulator;
 static Api::Machine *machine;
 static Api::Fds *fds;
@@ -395,7 +396,7 @@ double get_aspect_ratio(void)
 
 void retro_get_system_av_info(struct retro_system_av_info *info)
 {
-   const retro_system_timing timing = { is_pal ? 50.0 : 60.0, 48000.0 };
+   const retro_system_timing timing = { is_pal ? 50.0 : 60.0, SAMPLERATE };
    info->timing = timing;
 
    // It's better if the size is based on NTSC_WIDTH if the filter is on
@@ -427,6 +428,7 @@ void retro_set_environment(retro_environment_t cb)
       { "nestopia_genie_distortion", "Game Genie Sound Distortion; disabled|enabled" },
       { "nestopia_favored_system", "Favored System; auto|ntsc|pal|famicom|dendy" },
       { "nestopia_ram_power_state", "RAM Power-on State; 0x00|0xFF|random" },
+      { "nestopia_button_shift", "Shift A/B/X/Y Clockwise; disabled|enabled" },
       { "nestopia_turbo_pulse", "Turbo Pulse Speed; 2|3|4|5|6|7|8|9" },
       { NULL, NULL },
    };
@@ -477,9 +479,11 @@ typedef struct
    unsigned nes;
 } keymap;
 
-static const keymap bindmap[] = {
+static keymap bindmap_default[] = {
    { RETRO_DEVICE_ID_JOYPAD_A, Core::Input::Controllers::Pad::A },
    { RETRO_DEVICE_ID_JOYPAD_B, Core::Input::Controllers::Pad::B },
+   { RETRO_DEVICE_ID_JOYPAD_X, Core::Input::Controllers::Pad::A },
+   { RETRO_DEVICE_ID_JOYPAD_Y, Core::Input::Controllers::Pad::B },
    { RETRO_DEVICE_ID_JOYPAD_SELECT, Core::Input::Controllers::Pad::SELECT },
    { RETRO_DEVICE_ID_JOYPAD_START, Core::Input::Controllers::Pad::START },
    { RETRO_DEVICE_ID_JOYPAD_UP, Core::Input::Controllers::Pad::UP },
@@ -487,6 +491,21 @@ static const keymap bindmap[] = {
    { RETRO_DEVICE_ID_JOYPAD_LEFT, Core::Input::Controllers::Pad::LEFT },
    { RETRO_DEVICE_ID_JOYPAD_RIGHT, Core::Input::Controllers::Pad::RIGHT },
 };
+
+static keymap bindmap_shifted[] = {
+   { RETRO_DEVICE_ID_JOYPAD_B, Core::Input::Controllers::Pad::A },
+   { RETRO_DEVICE_ID_JOYPAD_Y, Core::Input::Controllers::Pad::B },
+   { RETRO_DEVICE_ID_JOYPAD_A, Core::Input::Controllers::Pad::A },
+   { RETRO_DEVICE_ID_JOYPAD_X, Core::Input::Controllers::Pad::B },
+   { RETRO_DEVICE_ID_JOYPAD_SELECT, Core::Input::Controllers::Pad::SELECT },
+   { RETRO_DEVICE_ID_JOYPAD_START, Core::Input::Controllers::Pad::START },
+   { RETRO_DEVICE_ID_JOYPAD_UP, Core::Input::Controllers::Pad::UP },
+   { RETRO_DEVICE_ID_JOYPAD_DOWN, Core::Input::Controllers::Pad::DOWN },
+   { RETRO_DEVICE_ID_JOYPAD_LEFT, Core::Input::Controllers::Pad::LEFT },
+   { RETRO_DEVICE_ID_JOYPAD_RIGHT, Core::Input::Controllers::Pad::RIGHT },
+};
+
+static keymap *bindmap = bindmap_default;
 
 static void update_input()
 {
@@ -543,15 +562,16 @@ static void update_input()
    
    static unsigned tstate = 2;
    
-   for (unsigned p = 0; p < 4; p++)
-      for (unsigned bind = 0; bind < sizeof(bindmap) / sizeof(bindmap[0]); bind++)
+   for (unsigned p = 0; p < 4; p++) {
+      for (unsigned bind = 0; bind < sizeof(bindmap_default) / sizeof(bindmap[0]); bind++)
       {
          input->pad[p].buttons |= input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, bindmap[bind].retro) ? bindmap[bind].nes : 0;
-         if (input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X))
-            tstate ? input->pad[p].buttons &= ~Core::Input::Controllers::Pad::A : input->pad[p].buttons |= Core::Input::Controllers::Pad::A;
-         if (input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y))
-            tstate ? input->pad[p].buttons &= ~Core::Input::Controllers::Pad::B : input->pad[p].buttons |= Core::Input::Controllers::Pad::B;
       }
+      if (input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, bindmap[2].retro))
+         tstate ? input->pad[p].buttons &= ~Core::Input::Controllers::Pad::A : input->pad[p].buttons |= Core::Input::Controllers::Pad::A;
+      if (input_state_cb(p, RETRO_DEVICE_JOYPAD, 0, bindmap[3].retro))
+         tstate ? input->pad[p].buttons &= ~Core::Input::Controllers::Pad::B : input->pad[p].buttons |= Core::Input::Controllers::Pad::B;
+   }
       
    if (tstate) tstate--; else tstate = tpulse;
    
@@ -601,6 +621,16 @@ static void check_variables(void)
    Api::Machine machine(emulator);
    Api::Video::RenderState::Filter filter;
 
+   var.key = "nestopia_button_shift";
+   
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var))
+   {
+      if (strcmp(var.value, "disabled") == 0)
+         bindmap = bindmap_default;
+      else if (strcmp(var.value, "enabled") == 0)
+         bindmap = bindmap_shifted;
+   }
+   
    var.key = "nestopia_favored_system";
    is_pal = false;
 
@@ -653,7 +683,7 @@ static void check_variables(void)
       }
    }
    if (audio) delete audio;
-   audio = new Api::Sound::Output(audio_buffer, is_pal ? 48000 / 50 : 48000 / 60);
+   audio = new Api::Sound::Output(audio_buffer, is_pal ? SAMPLERATE / 50 : SAMPLERATE / 60);
 
    var.key = "nestopia_genie_distortion";
 
@@ -897,7 +927,7 @@ static void check_variables(void)
    renderState.bits.mask.g = 0x0000ff00;
    renderState.bits.mask.b = 0x000000ff;
    if (NES_FAILED(video.SetRenderState( renderState )) && log_cb)
-      log_cb(RETRO_LOG_INFO, "Nestopia core rejected render state\n");;
+      log_cb(RETRO_LOG_WARN, "Nestopia core rejected render state\n");;
 
    retro_get_system_av_info(&av_info);
    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &av_info);
@@ -912,7 +942,7 @@ void retro_run(void)
    if (Api::Input(emulator).GetConnectedController(1) == 5)
       draw_crosshair(crossx, crossy);
    
-   unsigned frames = is_pal ? 48000 / 50 : 48000 / 60;
+   unsigned frames = is_pal ? SAMPLERATE / 50 : SAMPLERATE / 60;
    for (unsigned i = 0; i < frames; i++)
       audio_stereo_buffer[(i << 1) + 0] = audio_stereo_buffer[(i << 1) + 1] = audio_buffer[i];
    audio_batch_cb(audio_stereo_buffer, frames);
@@ -1070,13 +1100,13 @@ bool retro_load_game(const struct retro_game_info *info)
    {
       custompalette->read((char*)custpal, sizeof(custpal));
       if (log_cb)
-         log_cb(RETRO_LOG_WARN, "custom.pal loaded from system directory.\n");
+         log_cb(RETRO_LOG_INFO, "custom.pal loaded from system directory.\n");
    }
    else
    {
       memcpy(custpal, cxa2025as_palette, sizeof(custpal));
       if (log_cb)
-         log_cb(RETRO_LOG_WARN, "custom.pal not found in system directory.\n");
+         log_cb(RETRO_LOG_INFO, "custom.pal not found in system directory.\n");
    }
    delete custompalette;
    
@@ -1178,7 +1208,7 @@ bool retro_load_game(const struct retro_game_info *info)
 
    Api::Sound isound(emulator);
    isound.SetSampleBits(16);
-   isound.SetSampleRate(48000);
+   isound.SetSampleRate(SAMPLERATE);
    isound.SetSpeaker(Api::Sound::SPEAKER_MONO);
 
    if (dbpresent)

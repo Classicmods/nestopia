@@ -587,6 +587,12 @@ namespace Nes
 
 				audioSafeOverclock.SetOverclockSafety(true);//overclocking is only safe if direct pcm audio has not been written for one frame
 			}
+			else
+			{
+				cpu.SetOverclocking(false,0);
+				Apu& audioSafeOverclock = cpu.GetApu();
+				audioSafeOverclock.SetOverclockSafety(false);
+			}
 
 			cpu.SetFrameCycles( frame );
 		}
